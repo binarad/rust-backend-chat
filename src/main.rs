@@ -22,28 +22,25 @@ struct RegisterResponse {
     username: String,
 }
 
-use argon2::{
-    Argon2, PasswordVerifier,
-    password_hash::{PasswordHasher, generate_salt},
-};
-use password_hash::phc::{PasswordHash, SaltString};
-fn password_hash(password: &str) -> Result<String, argon2::password_hash::Error> {
-    // Salt generation
-    let salt = generate_salt(); // Dont't know what's better 
-    let salt2 = SaltString::generate(); // What's better?
+use argon2::{Argon2, PasswordVerifier, password_hash::PasswordHasher};
+use password_hash::phc::PasswordHash;
 
-    // Argon2 instance with default parameters
-    let argon2 = Argon2::default();
+async fn password_hash(
+    password: String,
+) -> Result<Result<String, argon2::password_hash::Error>, tokio::task::JoinError> {
+    tokio::task::spawn_blocking(move || {
+        // Argon2 instance with default parameters
+        let argon2 = Argon2::default();
 
-    let password_hash = argon2
-        .hash_password_with_salt(password.as_bytes(), &salt)?
-        .to_string();
+        let password_hash = argon2.hash_password(password.as_bytes())?.to_string();
 
-    Ok(password_hash)
+        Ok(password_hash)
+    })
+    .await
 }
 
 fn verify_password(password: &str, stored_hash: &str) -> bool {
-    let parsed_hash = match PasswordHash::new(&stored_hash) {
+    let parsed_hash = match PasswordHash::new(stored_hash) {
         Ok(hash) => hash,
         Err(e) => {
             tracing::error!("Failed to parse stored hash: {}", e);
@@ -68,8 +65,12 @@ async fn register_request(
         return Err(StatusCode::BAD_REQUEST);
     }
 
-    let hashed_password = match password_hash(&user.password) {
-        Ok(hash) => hash,
+    let hashed_password = match password_hash(user.password).await {
+        Ok(Ok(hash)) => hash,
+        Ok(Err(e)) => {
+            tracing::error!("An error occured during hashing: {}", e);
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
         Err(e) => {
             tracing::error!("Internal Server Error: {}", e);
             return Err(StatusCode::INTERNAL_SERVER_ERROR);
@@ -88,19 +89,17 @@ async fn register_request(
     .await;
 
     match request {
-        Ok(Some(row)) => {
-            return Ok((
-                StatusCode::CREATED,
-                Json(RegisterResponse {
-                    id: row.id,
-                    username: user.username,
-                }),
-            ));
-        }
-        Ok(None) => return Err(StatusCode::CONFLICT),
+        Ok(Some(row)) => Ok((
+            StatusCode::CREATED,
+            Json(RegisterResponse {
+                id: row.id,
+                username: user.username,
+            }),
+        )),
+        Ok(None) => Err(StatusCode::CONFLICT),
         Err(err) => {
             tracing::error!("Internale Server Error: {}", err);
-            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
 }
