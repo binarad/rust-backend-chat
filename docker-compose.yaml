@@ -1,0 +1,22 @@
+services:
+  db:
+    image: postgres:18
+    container_name: chat-postgres-dev
+    restart: always
+    environment:
+      POSTGRES_USER: admin
+      POSTGRES_PASSWORD: mysecretpassword
+      POSTGRES_DB: chat_db
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    ports:
+      - "127.0.0.1:5432:5432"  # Expose to localhost only
+    healthcheck: 
+      test: ["CMD-SHELL", "pg_isready -U admin -d chat_db"] 
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+
+volumes:
+  postgres_data:
